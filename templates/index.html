@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Room with Video</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes slideIn {
+            from {
+                transform: translateY(20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        .animate-slide-in {
+            animation: slideIn 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-r from-blue-100 via-purple-100 to-pink-100 min-h-screen flex items-center justify-center">
+
+    <!-- Chat App Container -->
+    <div class="bg-white shadow-xl rounded-lg p-6 w-full max-w-md transition-transform transform hover:scale-105 duration-200 ease-in-out">
+        
+        <!-- Title -->
+        <h1 class="text-3xl font-bold text-center mb-6 text-gray-800">Chat Room with Video</h1>
+        
+        <!-- Input Fields -->
+        <div class="mb-4 space-y-2">
+            <input 
+                id="username" 
+                class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400" 
+                placeholder="Enter your name" />
+            <input 
+                id="room" 
+                class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-400" 
+                placeholder="Enter room ID" />
+        </div>
+        
+        <!-- Buttons -->
+        <div class="flex justify-between mb-4">
+            <button 
+                onclick="joinRoom()" 
+                class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 focus:ring-2 focus:ring-blue-300 transition-transform transform hover:scale-110">
+                Join Room
+            </button>
+            <button 
+                onclick="leaveRoom()" 
+                class="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 focus:ring-2 focus:ring-red-300 transition-transform transform hover:scale-110">
+                Leave Room
+            </button>
+        </div>
+        
+        <!-- Chat Section -->
+        <div id="chat" class="bg-gray-50 p-4 border border-gray-200 rounded-lg shadow-inner">
+            <ul 
+                id="messages" 
+                class="space-y-2 mb-4 text-sm text-gray-800 max-h-40 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+            </ul>
+            <div class="flex">
+                <input 
+                    id="message" 
+                    class="flex-grow p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-400 mr-2" 
+                    placeholder="Enter message" />
+                <button 
+                    onclick="sendMessage()" 
+                    class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 focus:ring-2 focus:ring-green-300 transition-transform transform hover:scale-110">
+                    Send
+                </button>
+            </div>
+        </div>
+
+        <!-- Video Section -->
+        <div class="mt-6">
+            <h2 class="text-lg font-semibold text-gray-700 mb-2">Video Chat</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <video id="localVideo" autoplay muted class="w-full h-48 bg-black rounded-lg"></video>
+                <video id="remoteVideo" autoplay class="w-full h-48 bg-black rounded-lg"></video>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let localStream;
+        let remoteStream;
+        let peerConnection;
+        const config = {
+            iceServers: [
+                {
+                    urls: "stun:stun.l.google.com:19302"
+                }
+            ]
+        };
+
+        // Join room
+        function joinRoom() {
+            const username = document.getElementById('username').value;
+            const room = document.getElementById('room').value;
+            socket.emit('join', { username, room });
+            startVideo();
+        }
+
+        // Leave room
+        function leaveRoom() {
+            const username = document.getElementById('username').value;
+            const room = document.getElementById('room').value;
+            socket.emit('leave', { username, room });
+            stopVideo();
+        }
+
+        // Send message
+        function sendMessage() {
+            const username = document.getElementById('username').value;
+            const room = document.getElementById('room').value;
+            const message = document.getElementById('message').value;
+            socket.emit('message', { username, room, message });
+        }
+
+        // Display message
+        socket.on('message', (msg) => {
+            const messages = document.getElementById('messages');
+            const newMessage = document.createElement('li');
+            newMessage.className = "animate-slide-in bg-blue-100 rounded-lg px-3 py-2 shadow-sm";
+            newMessage.textContent = msg;
+            messages.appendChild(newMessage);
+        });
+
+        // Video setup
+        async function startVideo() {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            document.getElementById('localVideo').srcObject = localStream;
+
+            socket.emit('startVideo');
+        }
+
+        socket.on('offer', async (offer) => {
+            peerConnection = new RTCPeerConnection(config);
+            remoteStream = new MediaStream();
+            document.getElementById('remoteVideo').srcObject = remoteStream;
+
+            peerConnection.ontrack = (event) => {
+                event.streams[0].getTracks().forEach((track) => {
+                    remoteStream.addTrack(track);
+                });
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('candidate', event.candidate);
+                }
+            };
+
+            localStream.getTracks().forEach((track) => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            socket.emit('answer', answer);
+        });
+
+        socket.on('answer', async (answer) => {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        socket.on('candidate', async (candidate) => {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+
+        function stopVideo() {
+            localStream.getTracks().forEach((track) => track.stop());
+            document.getElementById('localVideo').srcObject = null;
+            document.getElementById('remoteVideo').srcObject = null;
+        }
+    </script>
+</body>
+</html>
